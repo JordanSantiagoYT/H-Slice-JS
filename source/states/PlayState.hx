@@ -7,6 +7,7 @@ import flixel.animation.FlxAnimation;
 #if desktop import backend.FFMpeg; #end
 import openfl.system.Capabilities;
 import objects.Note.CastNote;
+import objects.Note.SpamNoteData;
 import flixel.math.FlxRandom;
 import haxe.ds.IntMap;
 import haxe.Timer;
@@ -179,6 +180,8 @@ class PlayState extends MusicBeatState
 	public var eventNotes:Array<EventNote> = [];
 	public var sustainAnim:Bool = ClientPrefs.data.holdAnim;
 	private var skipNotes:NoteGroup;
+	
+	public static var spamNotes:Array<SpamNoteData> = [];
 
 	public var skipGhostNotes:Bool = ClientPrefs.data.skipGhostNotes;
 	public var ghostNotesCaught:Int = 0;
@@ -1825,7 +1828,7 @@ class PlayState extends MusicBeatState
 
 			var gottaHitNote:Bool;
 
-			var swagNote:CastNote;
+			var swagNote:CastNote = Note.DEFAULT_CAST;
 			var roundSus:Int;
 			var curStepCrochet:Float;
 			var sustainNote:CastNote;
@@ -1871,20 +1874,35 @@ class PlayState extends MusicBeatState
 					// CLEAR ANY POSSIBLE GHOST NOTES WHEN IF THE OPTION ENABLED
 					if (skipGhostNotes && sectionNoteCnt != 0) {
 						if (Math.abs(strumTimeVector[chartNoteData] - strumTime) <= removeTime) {
-							ghostNotesCaught++; continue;
+							ghostNotesCaught++; swagNote.density++; continue;
 						} else {
 							strumTimeVector[chartNoteData] = strumTime;
 						}
 					}
 
-					holdLength = songNotes[2] ?? 0.0;
-
 					swagNote = {
 						strumTime: songNotes[0],
 						noteData: noteColumn,
-						noteType: songNotes[3],
-						holdLength: holdLength
+						density: 1
 					};
+					
+					function extractSpamData(note:Array<Dynamic>):Array<Float> {
+						for (slot in [3, 4]) {
+							var field = note[slot];
+							if (Std.isOfType(field, Array)) {
+								return cast field;
+							} else if (field != null && Reflect.hasField(field, "cmpSpam")) {
+								var bd = Reflect.field(field, "cmpSpam");
+								if (Std.isOfType(bd, Array)) return cast bd;
+							}
+						}
+						return null;
+					}
+
+					var burst = extractSpamData(songNotes);
+					if (burst != null) swagNote.cmpSpam = burst;
+
+					if (songNotes[2] > 0.0) swagNote.holdLength = songNotes[2];
 					
 					swagNote.noteData |= gottaHitNote ? 1<<8 : 0; // mustHit
 					swagNote.noteData |= (section.gfSection && (gfSide ? gottaHitNote : !gottaHitNote)) || songNotes[3] == 'GF Sing' || songNotes[3] == 4 ? 1<<11 : 0; // gfNote
@@ -1893,27 +1911,29 @@ class PlayState extends MusicBeatState
 					
 					unspawnNotes.push(swagNote);
 
+					if (swagNote.holdLength > 0) {
 					curStepCrochet = 15000 / daBpm;
 					roundSus = Math.round(swagNote.holdLength / curStepCrochet);
-					if (roundSus > 0)
-					{
-						for (susNote in 0...roundSus + 1)
+						if (roundSus > 0)
 						{
-							sustainNote = {
-								strumTime: swagNote.strumTime + curStepCrochet * susNote,
-								noteData: swagNote.noteData,
-								noteType: swagNote.noteType,
-								holdLength: null
-							};
-							
-							sustainNote.noteData |= 1<<9; // isHold
-							sustainNote.noteData |= susNote == roundSus ? 1<<10 : 0; // isHoldEnd
+							for (susNote in 0...roundSus + 1)
+							{
+								sustainNote = {
+									strumTime: swagNote.strumTime + curStepCrochet * susNote,
+									noteData: swagNote.noteData,
+									density: swagNote.density,
+									noteType: swagNote.noteType
+								};
+								
+								sustainNote.noteData |= 1<<9; // isHold
+								sustainNote.noteData |= susNote == roundSus ? 1<<10 : 0; // isHoldEnd
 
-							unspawnSustainNotes.push(sustainNote);
+								unspawnSustainNotes.push(sustainNote);
 
-							++sustainNoteCnt;
+								++sustainNoteCnt;
+							}
+							sustainTotalCnt += sustainNoteCnt;
 						}
-						sustainTotalCnt += sustainNoteCnt;
 					}
 					
 					if (!noteTypes.contains(swagNote.noteType))
@@ -2903,16 +2923,7 @@ Average NPS in loading: ${numFormat(notes / takenNoteTime, 3)}');
 			targetNote = unspawnNotes[totalCnt];
 			fixedPosition = Conductor.songPosition - ClientPrefs.data.noteOffset;
 			
-			// for initalize
-			noteDataInfo = targetNote.noteData;
-			castHold = toBool(noteDataInfo & (1<<9));
-			castMust = toBool(noteDataInfo & (1<<8));
-			availNoteData = (noteDataInfo + (castMust ? 4 : 0)) & 255;
-			prevSus[availNoteData] = currSus[availNoteData] ?? false;
-			currSus[availNoteData] = castHold;
-
-			shownTime = showNotes ? castHold ? Math.max(spawnTime / songSpeed, globalElapsed * 1000) : spawnTime / songSpeed : 0;
-			shownRealTime = shownTime * 0.001;
+			noteCheck(targetNote);
 			isDisplay = targetNote.strumTime - fixedPosition < shownTime;
 
 			while (isDisplay && limitCount < limitNotes)
@@ -2924,101 +2935,35 @@ Average NPS in loading: ${numFormat(notes / takenNoteTime, 3)}');
 
 				isCanPass = !skipSpawnNote || (keepNotes ? !tooLate : timeLimit);
 
-				if (showAfter) {
-					if (!showAgain && !canBeHit) {
-						showAgain = true;
-						lDist = []; dist = [];
-						lDist.resize(8); dist.resize(8);
-						timeout = nanoPosition ? CoolUtil.getNanoTime() : Timer.stamp();
-					}
-				}
+				if (targetNote.cmpSpam != null) {
+					spamNotes.push({
+						remaining: Std.int(targetNote.cmpSpam[0]),
+						density: targetNote.cmpSpam[1],
+						seedNote: targetNote
+					});
 
-				if ((!noteJudge || !optimizeSpawnNote) && isCanPass) {
-					if (betterRecycle) {
-						dunceNote = notes.spawnNote(targetNote);
-					} else dunceNote = notes.recycle(Note).recycleNote(targetNote);
-	
-					strumGroup = dunceNote.mustPress ? playerStrums : opponentStrums;
-					dunceNote.strum = strumGroup.members[dunceNote.noteData];
-					
-					dist[availNoteData] = 0.45 * (Conductor.songPosition - dunceNote.strumTime) * songSpeed;
-
-					if (hideOverlapped > 0) {
-						iDist[availNoteData] = dist[availNoteData] - lDist[availNoteData];
-						dunceNote.visible = prevSus[availNoteData] != currSus[availNoteData] || Math.abs(iDist[availNoteData]) >= hideOverlapped;
-						// trace(availNoteData, prevSus[availNoteData], currSus[availNoteData], numFormat(dist[availNoteData], 3), numFormat(lDist[availNoteData], 3), dunceNote.visible ? "shown" : "hideeeeeeeeeeeeeeeeeeeee");
-						if (dunceNote.visible) {
-							lDist[availNoteData] = dist[availNoteData];
-							if (ClientPrefs.data.noteShaders) {
-								dunceNote.rgbShader.enabled = true;
-								dunceNote.defaultRGB();
-								if (dunceNote.hitCausesMiss) {
-									dunceNote.rgbShader.r = 0xFF101010;
-									dunceNote.rgbShader.g = 0xFFFF0000;
-									dunceNote.rgbShader.b = 0xFF990022;
-								}
-							}
-						} else dunceNote.rgbShader.enabled = false;
-					} else dunceNote.visible = true;
-
-					if (spawnNoteEvent) {
-						callOnLuas('onSpawnNote', [
-							totalCnt,
-							dunceNote.noteData,
-							dunceNote.noteType,
-							dunceNote.isSustainNote,
-							dunceNote.strumTime
-						]);
-						callOnHScript('onSpawnNote', [dunceNote]);
-					}
-
-					if (processFirst) {
-						if (dunceNote.visible) {
-							dunceNote.followStrumNote(songSpeed, dist[availNoteData]);
-							if (canBeHit && dunceNote.isSustainNote && dunceNote.strum.sustainReduce) {
-								dunceNote.clipToStrumNote();
-							}
-							++shownCnt;
-						}
-					} else ++shownCnt;
-					++limitCount;
+					targetNote.cmpSpam = null;
 				} else {
-					// Skip notes without spawning
-					skipHit |= 1 << availNoteData;
-					if (!timeLimit) ++skipTimeOut;
-
-					if (cpuControlled) {
-						if (!castHold) castMust ? ++skipBf : ++skipOp;
-					} else castMust ? noteMissCommon(availNoteData) : ++skipOp;
-
-					if (enableHoldSplash) susEnds |= (targetNote.noteData & 1<<10) > 0 ? 1 << availNoteData : 0;
-					
-					if (enableSplash) {
-						if (!castHold && (cpuControlled || !castMust) &&
-							splashMoment[availNoteData] < splashCount && splashUsing[availNoteData].length < splashCount)
-						{
-							skipNoteSplash.recycleNote(targetNote);
-							spawnNoteSplashOnNote(skipNoteSplash);
+					if (showAfter) {
+						if (!showAgain && !canBeHit) {
+							showAgain = true;
+							lDist = []; dist = [];
+							lDist.resize(8); dist.resize(8);
+							timeout = nanoPosition ? CoolUtil.getNanoTime() : Timer.stamp();
 						}
 					}
 
-					if (castMust) skipBfCNote = targetNote; else skipOpCNote = targetNote;
+					if ((!noteJudge || !optimizeSpawnNote) && isCanPass) {
+						spawn(targetNote);
+					} else {
+						skipNote(targetNote);
+					}
 				}
 				
 				++totalCnt;
 				if (unspawnNotes.length > totalCnt) targetNote = unspawnNotes[totalCnt]; else break;
 				
-				noteDataInfo = targetNote.noteData;
-				castHold = toBool(noteDataInfo & (1<<9));
-				castMust = toBool(noteDataInfo & (1<<8));
-				availNoteData = (noteDataInfo + (castMust ? 4 : 0)) & 255;
-				prevSus[availNoteData] = currSus[availNoteData];
-				currSus[availNoteData] = castHold;
-				
-				if (showNotes) {
-					shownTime = castHold ? Math.max(spawnTime / songSpeed, globalElapsed * 1000) : spawnTime / songSpeed;
-					shownRealTime = shownTime * 0.001;
-				}
+				noteCheck(targetNote);
 				
 				isDisplay = targetNote.strumTime - fixedPosition < shownTime;
 			}
@@ -3030,6 +2975,129 @@ Average NPS in loading: ${numFormat(notes / takenNoteTime, 3)}');
 				notes.fasterSort();
 			else noteSortShortCut();
 		}
+
+		timeout = nanoPosition ? CoolUtil.getNanoTime() : Timer.stamp();
+		for (spam in spamNotes) {
+			fixedPosition = Conductor.songPosition - ClientPrefs.data.noteOffset;
+			limitCount = notes.countLiving();
+
+			noteCheck(spam.seedNote);
+			isDisplay = spam.seedNote.strumTime - fixedPosition < shownTime;
+
+			while (isDisplay && limitCount < limitNotes)
+			{
+				canBeHit = fixedPosition > spam.seedNote.strumTime; // false is before, true is after
+				timeLimit = (nanoPosition ? CoolUtil.getNanoTime() : Timer.stamp()) - timeout < shownRealTime;
+
+				isCanPass = !skipSpawnNote || (keepNotes ? !canBeHit : timeLimit);
+				if (showAfter) {
+					if (!showAgain && !canBeHit) {
+						showAgain = true;
+						lDist = []; dist = [];
+						lDist.resize(8); dist.resize(8);
+						timeout = nanoPosition ? CoolUtil.getNanoTime() : Timer.stamp();
+					}
+				}
+				if ((!canBeHit || !optimizeSpawnNote) && isCanPass) spawn(spam.seedNote);
+				else skipNote(spam.seedNote);
+
+				if (spam.remaining > 0)
+					spam.remaining--;
+				else { spamNotes.remove(spam); break; }
+				spam.seedNote.strumTime += (15000/Conductor.bpm)/spam.density;
+
+				noteCheck(spam.seedNote);
+				isDisplay = spam.seedNote.strumTime - fixedPosition < shownTime;
+				timeLimit = (nanoPosition ? CoolUtil.getNanoTime() : Timer.stamp()) - timeout < shownRealTime;
+			}
+		}
+	}
+
+	function noteCheck(target:CastNote) {
+		// for initalize
+		noteDataInfo = target.noteData;
+		castHold = toBool(noteDataInfo & (1<<9));
+		castMust = toBool(noteDataInfo & (1<<8));
+		availNoteData = (noteDataInfo + (castMust ? 4 : 0)) & 255;
+		prevSus[availNoteData] = currSus[availNoteData] ?? false;
+		currSus[availNoteData] = castHold;
+
+		shownTime = showNotes ? castHold ? Math.max(spawnTime / songSpeed, globalElapsed * 1000) : spawnTime / songSpeed : 0;
+		shownRealTime = shownTime * 0.001;
+	}
+	
+	function spawn(targetNote:CastNote) {
+		if (betterRecycle) {
+			dunceNote = notes.spawnNote(targetNote);
+		} else dunceNote = notes.recycle(Note).recycleNote(targetNote);
+
+		strumGroup = dunceNote.mustPress ? playerStrums : opponentStrums;
+		dunceNote.strum = strumGroup.members[dunceNote.noteData];
+		
+		dist[availNoteData] = 0.45 * (Conductor.songPosition - dunceNote.strumTime) * songSpeed;
+
+		if (hideOverlapped > 0) {
+			iDist[availNoteData] = dist[availNoteData] - lDist[availNoteData];
+			dunceNote.visible = prevSus[availNoteData] != currSus[availNoteData] || Math.abs(iDist[availNoteData]) >= hideOverlapped;
+			// trace(availNoteData, prevSus[availNoteData], currSus[availNoteData], numFormat(dist[availNoteData], 3), numFormat(lDist[availNoteData], 3), dunceNote.visible ? "shown" : "hideeeeeeeeeeeeeeeeeeeee");
+			if (dunceNote.visible) {
+				lDist[availNoteData] = dist[availNoteData];
+				if (ClientPrefs.data.noteShaders) {
+					dunceNote.rgbShader.enabled = true;
+					dunceNote.defaultRGB();
+					if (dunceNote.hitCausesMiss) {
+						dunceNote.rgbShader.r = 0xFF101010;
+						dunceNote.rgbShader.g = 0xFFFF0000;
+						dunceNote.rgbShader.b = 0xFF990022;
+					}
+				}
+			} else dunceNote.rgbShader.enabled = false;
+		} else dunceNote.visible = true;
+
+		if (spawnNoteEvent) {
+			callOnLuas('onSpawnNote', [
+				totalCnt,
+				dunceNote.noteData,
+				dunceNote.noteType,
+				dunceNote.isSustainNote,
+				dunceNote.strumTime
+			]);
+			callOnHScript('onSpawnNote', [dunceNote]);
+		}
+
+		if (processFirst) {
+			if (dunceNote.visible) {
+				dunceNote.followStrumNote(songSpeed, dist[availNoteData]);
+				if (canBeHit && dunceNote.isSustainNote && dunceNote.strum.sustainReduce) {
+					dunceNote.clipToStrumNote();
+				}
+				++shownCnt;
+			}
+		} else ++shownCnt;
+		++limitCount;
+	}
+
+	function skipNote(targetNote:CastNote) {
+		// Skip notes without spawning
+		skipHit |= 1 << availNoteData;
+		if (!timeLimit) ++skipTimeOut;
+
+		if (cpuControlled) {
+			if (!castHold) castMust ? skipBf += Std.int(targetNote.density) : skipOp += Std.int(targetNote.density);
+		} else castMust ? noteMissCommon(availNoteData) : ++skipOp;
+
+		if (enableHoldSplash) susEnds |= (targetNote.noteData & 1<<10) > 0 ? 1 << availNoteData : 0;
+		
+		if (enableSplash) {
+			if (!castHold && (cpuControlled || !castMust) &&
+				splashMoment[availNoteData] < splashCount && splashUsing[availNoteData].length < splashCount)
+			{
+				skipNoteSplash.recycleNote(targetNote);
+				spawnNoteSplashOnNote(skipNoteSplash);
+			}
+		}
+
+		if (castMust) skipBfCNote = targetNote; else skipOpCNote = targetNote;
 	}
 
 	var index:Int = 0;
@@ -4930,7 +4998,7 @@ Average NPS in loading: ${numFormat(notes / takenNoteTime, 3)}');
 	
 		++opHitFrame;
 		if (!note.isSustainNote) {			
-			++opCombo; ++opSideHit; daHit = true;
+			opCombo += note.density; opSideHit += note.density; daHit = true;
 			if (showPopups && changePopup) popUpHitNote = note;
 			invalidateNote(note);
 		}
@@ -5025,7 +5093,7 @@ Average NPS in loading: ${numFormat(notes / takenNoteTime, 3)}');
 			++bfHitFrame;
 			if (!note.isSustainNote)
 			{
-				++combo; ++bfSideHit; globalNoteHit = true;
+				combo += note.density; bfSideHit += note.density; globalNoteHit = true;
 				maxCombo = Math.max(maxCombo, combo);
 				if (showPopups) popUpHitNote = note;
 				if (!cpuControlled) addScore(note);
