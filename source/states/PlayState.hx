@@ -1856,6 +1856,7 @@ class PlayState extends MusicBeatState
 				}
 			}
 
+			spawnBPM = daBpm;
 			for (section in sectionsData)
 			{
 				++cnt;
@@ -2909,6 +2910,7 @@ Average NPS in loading: ${numFormat(notes / takenNoteTime, 3)}');
 	var availNoteData:Int = 0;
 
 	var susEnds:Int = 0;
+	var spawnBPM:Float = 100; //just because
 	
 	public function noteSpawn()
 	{
@@ -3004,7 +3006,8 @@ Average NPS in loading: ${numFormat(notes / takenNoteTime, 3)}');
 				if (spam.remaining > 0)
 					spam.remaining--;
 				else { spamNotes.remove(spam); break; }
-				spam.seedNote.strumTime += (15000/Conductor.bpm)/spam.density;
+				spam.seedNote.strumTime += (15000/spawnBPM)/spam.density;
+				spawnBPM = Conductor.getBPMFromSeconds(spam.seedNote.strumTime).bpm;
 
 				noteCheck(spam.seedNote);
 				isDisplay = spam.seedNote.strumTime - fixedPosition < shownTime;
