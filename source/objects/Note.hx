@@ -56,7 +56,7 @@ typedef CastNote = {
 }
 
 typedef SpamNoteData = {
-    var remaining:Int;
+    var remaining:Float;
     var density:Float;
     var seedNote:CastNote;  // reference to original note
 };
