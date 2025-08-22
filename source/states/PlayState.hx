@@ -2918,6 +2918,69 @@ Average NPS in loading: ${numFormat(notes / takenNoteTime, 3)}');
 
 		lDist = []; dist = [];
 		lDist.resize(8); dist.resize(8);
+
+		function spamSpawn() {
+			for (spam in spamNotes) {
+				fixedPosition = Conductor.songPosition - ClientPrefs.data.noteOffset;
+				limitCount = notes.countLiving();
+
+				noteCheck(spam.seedNote);
+				isDisplay = spam.seedNote.strumTime - fixedPosition < shownTime;
+
+				while (isDisplay && limitCount < limitNotes)
+				{
+					canBeHit = fixedPosition > spam.seedNote.strumTime; // false is before, true is after
+					timeLimit = (nanoPosition ? CoolUtil.getNanoTime() : Timer.stamp()) - timeout < shownRealTime;
+
+					isCanPass = !skipSpawnNote || (keepNotes ? !canBeHit : timeLimit);
+					if (showAfter) {
+						if (!showAgain && !canBeHit) {
+							showAgain = true;
+							lDist = []; dist = [];
+							lDist.resize(8); dist.resize(8);
+							timeout = nanoPosition ? CoolUtil.getNanoTime() : Timer.stamp();
+						}
+					}
+					if ((!canBeHit || !optimizeSpawnNote) && isCanPass) spawn(spam.seedNote);
+					else {
+						var bulkSkipCount:Float = 0;
+						var noteInterval = (15000 / spawnBPM) / spam.density;
+						if (spam.seedNote.strumTime < fixedPosition) {
+							// Only skip notes that are fully in the past
+							bulkSkipCount = Math.floor((fixedPosition - spam.seedNote.strumTime) / noteInterval) - 1;
+							bulkSkipCount = Math.min(bulkSkipCount, spam.remaining);
+						}
+						if (bulkSkipCount > 0) {
+							bulkSkipCount = Math.min(bulkSkipCount, spam.remaining);
+							spam.seedNote.strumTime += bulkSkipCount * noteInterval;
+							spam.remaining -= bulkSkipCount;
+
+							// Update skip counters
+							if (castMust) skipBf += Std.int(bulkSkipCount);
+							else skipOp += Std.int(bulkSkipCount);
+							skipCnt += Std.int(bulkSkipCount);
+							if (castMust) skipBfCNote = targetNote; else skipOpCNote = spam.seedNote;
+
+							if (spam.remaining <= 0) {
+								spamNotes.remove(spam);
+								break;
+							}
+						}
+						skipNote(spam.seedNote);
+					}
+
+					if (spam.remaining > 0)
+						spam.remaining--;
+					else { spamNotes.remove(spam); break; }
+					spam.seedNote.strumTime += (15000/spawnBPM)/spam.density;
+					spawnBPM = Conductor.getBPMFromSeconds(spam.seedNote.strumTime).bpm;
+
+					noteCheck(spam.seedNote);
+					isDisplay = spam.seedNote.strumTime - fixedPosition < shownTime;
+					timeLimit = (nanoPosition ? CoolUtil.getNanoTime() : Timer.stamp()) - timeout < shownRealTime;
+				}
+			}
+		}
 		
 		if (unspawnNotes.length > totalCnt)
 		{
@@ -2945,6 +3008,7 @@ Average NPS in loading: ${numFormat(notes / takenNoteTime, 3)}');
 					});
 
 					targetNote.cmpSpam = null;
+					spamSpawn();
 				} else {
 					if (showAfter) {
 						if (!showAgain && !canBeHit) {
@@ -2979,41 +3043,7 @@ Average NPS in loading: ${numFormat(notes / takenNoteTime, 3)}');
 		}
 
 		timeout = nanoPosition ? CoolUtil.getNanoTime() : Timer.stamp();
-		for (spam in spamNotes) {
-			fixedPosition = Conductor.songPosition - ClientPrefs.data.noteOffset;
-			limitCount = notes.countLiving();
-
-			noteCheck(spam.seedNote);
-			isDisplay = spam.seedNote.strumTime - fixedPosition < shownTime;
-
-			while (isDisplay && limitCount < limitNotes)
-			{
-				canBeHit = fixedPosition > spam.seedNote.strumTime; // false is before, true is after
-				timeLimit = (nanoPosition ? CoolUtil.getNanoTime() : Timer.stamp()) - timeout < shownRealTime;
-
-				isCanPass = !skipSpawnNote || (keepNotes ? !canBeHit : timeLimit);
-				if (showAfter) {
-					if (!showAgain && !canBeHit) {
-						showAgain = true;
-						lDist = []; dist = [];
-						lDist.resize(8); dist.resize(8);
-						timeout = nanoPosition ? CoolUtil.getNanoTime() : Timer.stamp();
-					}
-				}
-				if ((!canBeHit || !optimizeSpawnNote) && isCanPass) spawn(spam.seedNote);
-				else skipNote(spam.seedNote);
-
-				if (spam.remaining > 0)
-					spam.remaining--;
-				else { spamNotes.remove(spam); break; }
-				spam.seedNote.strumTime += (15000/spawnBPM)/spam.density;
-				spawnBPM = Conductor.getBPMFromSeconds(spam.seedNote.strumTime).bpm;
-
-				noteCheck(spam.seedNote);
-				isDisplay = spam.seedNote.strumTime - fixedPosition < shownTime;
-				timeLimit = (nanoPosition ? CoolUtil.getNanoTime() : Timer.stamp()) - timeout < shownRealTime;
-			}
-		}
+		spamSpawn();
 	}
 
 	function noteCheck(target:CastNote) {
@@ -4267,7 +4297,7 @@ Average NPS in loading: ${numFormat(notes / takenNoteTime, 3)}');
 			transitioning = true;
 		}
 		
-		unspawnNotes = [];
+		unspawnNotes = []; spamNotes = [];
 		return true;
 	}
 
