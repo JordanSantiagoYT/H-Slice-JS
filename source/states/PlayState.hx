@@ -1892,9 +1892,9 @@ class PlayState extends MusicBeatState
 							var field = note[slot];
 							if (Std.isOfType(field, Array)) {
 								return cast field;
-							} else if (field != null && Reflect.hasField(field, "cmpSpam")) {
-								var bd = Reflect.field(field, "cmpSpam");
-								if (Std.isOfType(bd, Array)) return cast bd;
+							} else if (field != null && field.cmpSpam != null) {
+								var bd = field.cmpSpam;
+								if (Std.isOfType(bd, Array)) return bd;
 							}
 						}
 						return null;
@@ -2306,12 +2306,12 @@ Average NPS in loading: ${numFormat(notes / takenNoteTime, 3)}');
 	// Rendering Counter
 	var shownCnt:Int = 0;
 	public var shownMax:Int = 0;
-	var skipCnt:Int = 0;
-	var skipBf:Int = 0;
-	var skipOp:Int = 0;
-	var skipTimeOut:Int = 0;
+	var skipCnt:Float = 0;
+	var skipBf:Float = 0;
+	var skipOp:Float = 0;
+	var skipTimeOut:Float = 0;
 	var skipTotalCnt:Float = 0;
-	var skipMax:Int = 0;
+	var skipMax:Float = 0;
 
 	// Infomation
 	var changeInfo:Bool = false;
@@ -2352,7 +2352,8 @@ Average NPS in loading: ${numFormat(notes / takenNoteTime, 3)}');
 		
 		daHit = bfHit = showAgain = false; canAnim.fill(true);
 		if (popUpHitNote != null) popUpHitNote = null;
-		hit = skipHit = skipBf = skipOp = shownCnt = susEnds = 0;
+		hit = skipHit = shownCnt = susEnds = 0;
+		skipBf = skipOp = 0;
 		lastSongSpeed = songSpeed;
 
 		if (refBpm != Conductor.bpm) {
@@ -2669,7 +2670,7 @@ Average NPS in loading: ${numFormat(notes / takenNoteTime, 3)}');
 					}
 
 					if (toBool(flag & 2)) {
-						skipMax = FlxMath.maxInt(skipCnt, skipMax);
+						skipMax = Math.max(skipCnt, skipMax);
 
 						if (numberDelimit)
 							renderedInfo = 'Rendered/Skipped: ${formatD(Math.max(notes.countLiving(), 0))}/${formatD(skipCnt)}/${formatD(notes.length)}/${formatD(skipMax)}';
@@ -2929,6 +2930,7 @@ Average NPS in loading: ${numFormat(notes / takenNoteTime, 3)}');
 
 				while (isDisplay && limitCount < limitNotes)
 				{
+					var oldST = spam.seedNote.strumTime;
 					canBeHit = fixedPosition > spam.seedNote.strumTime; // false is before, true is after
 					timeLimit = (nanoPosition ? CoolUtil.getNanoTime() : Timer.stamp()) - timeout < shownRealTime;
 
@@ -2951,14 +2953,10 @@ Average NPS in loading: ${numFormat(notes / takenNoteTime, 3)}');
 							bulkSkipCount = Math.min(bulkSkipCount, spam.remaining);
 						}
 						if (bulkSkipCount > 0) {
-							bulkSkipCount = Math.min(bulkSkipCount, spam.remaining);
-							spam.seedNote.strumTime += bulkSkipCount * noteInterval;
-							spam.remaining -= bulkSkipCount;
-
 							// Update skip counters
-							if (castMust) skipBf += Std.int(bulkSkipCount);
-							else skipOp += Std.int(bulkSkipCount);
-							skipCnt += Std.int(bulkSkipCount);
+							if (castMust) skipBf += bulkSkipCount;
+							else skipOp += bulkSkipCount;
+							skipCnt += bulkSkipCount;
 							if (castMust) skipBfCNote = targetNote; else skipOpCNote = spam.seedNote;
 
 							if (spam.remaining <= 0) {
@@ -2976,7 +2974,7 @@ Average NPS in loading: ${numFormat(notes / takenNoteTime, 3)}');
 					spawnBPM = Conductor.getBPMFromSeconds(spam.seedNote.strumTime).bpm;
 
 					noteCheck(spam.seedNote);
-					isDisplay = spam.seedNote.strumTime - fixedPosition < shownTime;
+					isDisplay = spam.seedNote.strumTime - fixedPosition < shownTime && spam.seedNote.strumTime != oldST;
 					timeLimit = (nanoPosition ? CoolUtil.getNanoTime() : Timer.stamp()) - timeout < shownRealTime;
 				}
 			}
@@ -3002,7 +3000,7 @@ Average NPS in loading: ${numFormat(notes / takenNoteTime, 3)}');
 
 				if (targetNote.cmpSpam != null) {
 					spamNotes.push({
-						remaining: Std.int(targetNote.cmpSpam[0]),
+						remaining: (targetNote.cmpSpam[0]),
 						density: targetNote.cmpSpam[1],
 						seedNote: targetNote
 					});
@@ -3116,8 +3114,8 @@ Average NPS in loading: ${numFormat(notes / takenNoteTime, 3)}');
 		if (!timeLimit) ++skipTimeOut;
 
 		if (cpuControlled) {
-			if (!castHold) castMust ? skipBf += Std.int(targetNote.density) : skipOp += Std.int(targetNote.density);
-		} else castMust ? noteMissCommon(availNoteData) : ++skipOp;
+			if (!castHold) castMust ? skipBf += targetNote.density : skipOp += targetNote.density;
+		} else castMust ? noteMissCommon(availNoteData) : skipOp += targetNote.density;
 
 		if (enableHoldSplash) susEnds |= (targetNote.noteData & 1<<10) > 0 ? 1 << availNoteData : 0;
 		
@@ -3313,7 +3311,7 @@ Average NPS in loading: ${numFormat(notes / takenNoteTime, 3)}');
 					for (i in 0...loopVector.length) {
 						if (!skipAnim[i+1]) continue;
 						var daNote = loopVector[i];
-						var scriptTarget = [skipOp, skipBf];
+						var scriptTarget = [Std.int(skipOp), Std.int(skipBf)];
 						skipArray = [0, Std.int(Math.abs(daNote.noteData)), daNote.noteType, daNote.isSustainNote];
 						
 						for (shit in 0...scriptTarget[index]) {
@@ -4553,7 +4551,7 @@ Average NPS in loading: ${numFormat(notes / takenNoteTime, 3)}');
 		}
 
 		if (showRating && bfHit) {
-			ratingImage = cpuControlled ? forceSick.image : daRating.image;
+			ratingImage = cpuControlled || daRating == null ? forceSick.image : daRating.image;
 
 			ratingPop = popUpGroup.recycle(Popup);
 			ratingPop.setupRatingData(uiPrefix + ratingImage + uiPostfix);
@@ -4570,7 +4568,7 @@ Average NPS in loading: ${numFormat(notes / takenNoteTime, 3)}');
 
 		if (showComboNum) {
 			while(tempCombo >= 10) {
-				seperatedScore.unshift(Std.int(tempCombo / 10) % 10);
+				seperatedScore.unshift(Math.abs(tempCombo / 10) % 10);
 				tempCombo /= 10;
 			}
 			seperatedScore.push(tempNotes % 10);
